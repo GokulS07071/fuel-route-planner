@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fuel Route Planner — {{ plan.request.start.label }} → {{ plan.request.end.label }}</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background: #0b1020; color: #e6e9f2; display: flex; height: 100vh; overflow: hidden; }
+  aside { width: 340px; min-width: 340px; padding: 20px; overflow-y: auto;
+          background: linear-gradient(180deg, #101735, #0b1020); border-right: 1px solid #1d2647; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  .muted { color: #8b93ad; font-size: 12.5px; }
+  .stat { display: flex; justify-content: space-between; padding: 9px 0;
+          border-bottom: 1px dashed #1d2647; font-size: 14px; }
+  .stat b { font-variant-numeric: tabular-nums; }
+  .total { margin-top: 14px; padding: 14px; border-radius: 12px;
+           background: linear-gradient(135deg, #1c2a63, #132049); border: 1px solid #2c3b7d; }
+  .total .big { font-size: 26px; font-weight: 800; color: #7cf0c6; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+       color: #8b93ad; margin: 20px 0 8px; }
+  ol { margin: 0; padding-left: 18px; }
+  li { margin: 7px 0; font-size: 13.5px; line-height: 1.45; }
+  li .price { color: #7cf0c6; font-weight: 700; }
+  li .city { color: #8b93ad; }
+  #map { flex: 1; height: 100%; background: #0d1430; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
+           background: #1d2647; color: #9fb1ff; font-size: 11.5px; margin-right: 6px; }
+  .legend { margin-top: 16px; font-size: 12.5px; color: #8b93ad; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  @media (max-width: 600px) {
+    body { flex-direction: column; overflow: auto; height: auto; }
+    aside { width: auto; min-width: 0; }
+    #map { flex: none; height: 65vh; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>⛽ Fuel Route Planner</h1>
+  <div class="muted">{{ plan.request.start.label }}</div>
+  <div class="muted">↓ {{ plan.route.distance_miles }} mi · {{ plan.route.duration_minutes }} min</div>
+  <div class="muted">{{ plan.request.end.label }}</div>
+
+  <div class="total">
+    <div class="muted">Total fuel cost ({{ plan.fuel_plan.total_gallons }} gal @ {{ plan.request.vehicle.mpg }} mpg)</div>
+    <div class="big">${{ plan.fuel_plan.total_cost }}</div>
+  </div>
+
+  <div class="stat"><span>Distance</span><b>{{ plan.route.distance_miles }} mi</b></div>
+  <div class="stat"><span>Vehicle range</span><b>{{ plan.request.vehicle.range_miles }} mi</b></div>
+  <div class="stat"><span>Fuel stops</span><b>{{ plan.fuel_plan.stops|length }}</b></div>
+  <div class="stat"><span>Gallons</span><b>{{ plan.fuel_plan.total_gallons }}</b></div>
+
+  <h2>Refuelling plan</h2>
+  <ol>
+    {% for s in plan.fuel_plan.stops %}
+    <li>
+      {% if s.kind == "origin" %}<b>Initial fill</b><br />{% endif %}
+      {% if s.station %}
+        <b>{{ s.station.name }}</b><br />
+        <span class="city">{{ s.station.city }}, {{ s.station.state }} · mile {{ s.mile_marker }}</span><br />
+        <span class="price">${{ s.price_per_gallon }}/gal</span>
+        · {{ s.gallons }} gal · ${{ s.cost }}
+      {% else %}
+        <b>Origin fill</b> <span class="city">(start, mile {{ s.mile_marker }})</span><br />
+        <span class="price">${{ s.price_per_gallon }}/gal</span>
+        · {{ s.gallons }} gal · ${{ s.cost }}
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  <p class="muted">Station pins approximate city locations. Fuel estimates exclude detour miles; confirm station locations and current prices before travel.</p>
+
+  <div class="legend">
+    <span class="dot" style="background:#5b8cff"></span>Route
+    <span class="dot" style="background:#7cf0c6; margin-left:12px"></span>Fuel stop
+    <span class="dot" style="background:#ff6b81; margin-left:12px"></span>Endpoints
+  </div>
+  <div class="legend" style="margin-top:10px">
+    Routing: OSRM · Maps: © OpenStreetMap contributors · Data: OPIS
+  </div>
+</aside>
+<div id="map"></div>
+
+{{ plan|json_script:"plan-data" }}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+<script>
+const plan = JSON.parse(document.getElementById("plan-data").textContent);
+const latlngs = plan.route.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+
+const map = L.map("map");
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  referrerPolicy: "strict-origin-when-cross-origin",
+  attribution: "© OpenStreetMap contributors",
+}).addTo(map);
+
+L.polyline(latlngs, { color: "#5b8cff", weight: 5, opacity: 0.9 }).addTo(map);
+
+const endPt = (p) => L.latLng(p.lat, p.lon);
+const popup = (...lines) => {
+  const element = document.createElement("div");
+  for (const line of lines) {
+    const row = document.createElement("div");
+    row.textContent = line;
+    element.appendChild(row);
+  }
+  return element;
+};
+L.marker(endPt(plan.request.start), {
+  icon: L.divIcon({ className: "", html: "<div style='background:#ff6b81;width:14px;height:14px;border-radius:50%;border:2px solid #fff'></div>", iconSize: [14, 14] }),
+}).addTo(map).bindPopup(popup("Start", plan.request.start.label));
+
+L.marker(endPt(plan.request.end), {
+  icon: L.divIcon({ className: "", html: "<div style='background:#ff6b81;width:14px;height:14px;border-radius:50%;border:2px solid #fff'></div>", iconSize: [14, 14] }),
+}).addTo(map).bindPopup(popup("Finish", plan.request.end.label));
+
+for (const s of plan.fuel_plan.stops) {
+  if (!s.station) continue;
+  const m = L.marker([s.station.lat, s.station.lon], {
+    icon: L.divIcon({ className: "", html: "<div style='background:#7cf0c6;width:14px;height:14px;border-radius:50%;border:2px solid #0b1020;box-shadow:0 0 6px #7cf0c6'></div>", iconSize: [14, 14] }),
+  }).addTo(map);
+  m.bindPopup(popup(s.kind === "origin" ? "Initial fill" : "Fuel stop", s.station.name,
+    s.station.city + ", " + s.station.state,
+    "$" + s.station.price_per_gallon + "/gal · buy " + s.gallons + " gal ($" + s.cost + ")",
+    "mile " + s.mile_marker));
+}
+
+map.fitBounds(L.latLngBounds(latlngs), { padding: [30, 30] });
+</script>
+</body>
+</html>
